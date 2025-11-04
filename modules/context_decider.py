@@ -10,7 +10,7 @@ from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunct
 embedder = SentenceTransformerEmbeddingFunction(model_name="all-MiniLM-L6-v2")
 
 # Threshold for determining if conversation is "related"
-CONTINUITY_THRESHOLD = 0.45  # smaller = stricter
+CONTINUITY_THRESHOLD = np.mean(last_50_distances) + α * np.std(last_50_distances)  # smaller = stricter
 
 
 def should_retrieve(current_prompt: str, lookback_n: int = 3) -> bool:
