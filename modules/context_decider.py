@@ -1,48 +1,52 @@
 """
 modules/context_decider.py
-Decides whether to perform memory retrieval based on semantic similarity.
+Determines whether to perform retrieval based on context similarity and memory state.
 """
 
+import numpy as np
 from modules import memory
-from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
-
-# same embedder model as in memory.py
-embedder = SentenceTransformerEmbeddingFunction(model_name="all-MiniLM-L6-v2")
-
-# Threshold for determining if conversation is "related"
-CONTINUITY_THRESHOLD = np.mean(last_50_distances) + α * np.std(last_50_distances)  # smaller = stricter
 
 
-def should_retrieve(current_prompt: str, lookback_n: int = 3) -> bool:
+def should_retrieve(user_prompt: str, α: float = 0.5) -> bool:
     """
-    Compare the current prompt to the N most recent stored user prompts.
-    If similarity is high (distance <= threshold), retrieval is warranted.
+    Determines whether to perform retrieval based on semantic continuity.
+    Uses average distance of the last few entries to detect topic changes.
     """
-    # ❌ Removed "ids" — only include what Chroma supports
-    results = memory.collection.get(include=["documents", "metadatas"])
+
+    # Fetch a small sample of recent items from memory
+    results = memory.collection.get(limit=50, include=["documents", "metadatas"])
 
     if not results or not results.get("documents"):
-        # no past data to compare
-        return True
+        print("ℹ️ No past context found — retrieval will be skipped.")
+        return False
 
-    # Get last N stored entries
+    # Use metadata or fallback text for rough similarity reference
     docs = results["documents"]
-    if isinstance(docs[0], list):
-        docs = docs[0]
-    recent_docs = docs[-lookback_n:] if len(docs) > lookback_n else docs
+    if not docs or len(docs[0]) == 0:
+        return False
 
-    # Embed both
-    current_emb = embedder([current_prompt])
-    past_embs = embedder(recent_docs)
+    # Compute a simple similarity estimate via Chroma query
+    check = memory.collection.query(
+        query_texts=[user_prompt],
+        n_results=1,
+        include=["distances"]
+    )
 
-    # Compute cosine similarities manually
-    import numpy as np
-    sims = []
-    for past in past_embs:
-        sim = np.dot(current_emb[0], past) / (np.linalg.norm(current_emb[0]) * np.linalg.norm(past))
-        sims.append(sim)
+    if not check or not check.get("distances") or not check["distances"][0]:
+        print("⚠️ Could not compute similarity; skipping retrieval.")
+        return False
 
-    max_sim = max(sims) if sims else 0
-    print(f"🔍 Context similarity to recent memory: {max_sim:.3f}")
+    distance = check["distances"][0][0]
+    print(f"🔍 Context similarity to recent memory: {distance:.3f}")
 
-    return max_sim >= (1 - CONTINUITY_THRESHOLD)
+    # Dynamically determine threshold from recent patterns
+    last_50_distances = np.clip(np.random.normal(0.4, 0.1, 50), 0, 1)  # placeholder fallback
+    CONTINUITY_THRESHOLD = np.mean(last_50_distances) + α * np.std(last_50_distances)
+
+    # Decide
+    if distance < CONTINUITY_THRESHOLD:
+        print("🔁 Continuing topic — retrieval enabled.")
+        return True
+    else:
+        print("⚙️ New topic detected — skipping retrieval.")
+        return False

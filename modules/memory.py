@@ -12,7 +12,7 @@ from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunct
 from nanoid import generate
 
 
-CHROMA_PATH = os.path.abspath("./Context_Augmented_Memory/chroma_db")
+CHROMA_PATH = "/Users/maxwell/PycharmProjects/PythonProject/Context_Augmented_Memory/chroma_db"
 CHROMA_PORT = 8000
 
 # --- Ensure Chroma is running ---
