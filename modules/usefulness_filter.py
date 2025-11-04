@@ -1,35 +1,63 @@
 """
-modules/usefulness_filter.py
-Evaluates whether a prompt is semantically meaningful enough to store in memory.
+usefulness_filter.py
+Determines whether a user prompt should be stored in long-term memory.
+Fully configurable — thresholds and blacklist loaded dynamically.
 """
 
+import re
 from openai import OpenAI
-import os
-from dotenv import load_dotenv
+from modules import config_manager
 
-load_dotenv()
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+client = OpenAI()
+
+# Load configuration dynamically
+config = config_manager.load_config()
+MIN_WORD_COUNT = config["usefulness_filter"]["min_word_count"]
+MIN_CHAR_COUNT = config["usefulness_filter"]["min_char_count"]
+BLACKLIST_PHRASES = config["usefulness_filter"]["blacklist_phrases"]
 
 
 def is_useful(prompt: str) -> bool:
     """
-    Uses a lightweight LLM check to decide whether the user prompt
-    carries standalone meaning or depends too heavily on missing context.
+    Returns True if the user input contains meaningful factual information.
+    Uses both heuristic and optional LLM-based checks.
     """
-    if len(prompt.strip()) < 3:
-        return False  # trivial one-word or empty prompts
 
-    system_prompt = (
-        "You are a strict memory gatekeeper. Decide if the following text is meaningful "
-        "enough to be stored as a standalone memory. Respond only with 'true' or 'false'. "
-        "Return 'false' if the text depends on prior context (e.g., 'What about him?', 'Yes.', 'Why?')."
-    )
+    if not prompt or len(prompt.strip()) < MIN_CHAR_COUNT:
+        return False
 
-    response = client.responses.create(
-        model="gpt-4o-mini",
-        input=f"{system_prompt}\n\nText: {prompt}",
-        temperature=0
-    )
+    prompt_lower = prompt.lower().strip()
 
-    decision = response.output[0].content[0].text.strip().lower()
-    return "true" in decision
+    # 🚫 Skip trivial or blacklisted phrases
+    if any(phrase in prompt_lower for phrase in BLACKLIST_PHRASES):
+        return False
+
+    # 🚫 Skip short or filler responses
+    if len(prompt.split()) < MIN_WORD_COUNT:
+        return False
+
+    if re.fullmatch(r"(yes|no|ok|okay|sure|maybe|hmm|thanks|thank you|cool)", prompt_lower):
+        return False
+
+    # ✅ Allow descriptive / factual statements
+    if re.search(
+        r"\b(is|am|are|was|were|have|has|called|named|lives|works|likes|owns|contains)\b",
+        prompt_lower,
+    ):
+        return True
+
+    # 🧠 Optional fallback: use LLM for semantic judgment
+    try:
+        response = client.responses.create(
+            model="gpt-4o-mini",
+            input=(
+                "Determine if the following text contains storable factual information. "
+                "Reply 'true' if it conveys personal facts, relationships, or properties. "
+                "Reply 'false' if it's trivial, meta, or uninformative.\n\n"
+                f"Text: {prompt}"
+            ),
+        )
+        decision = response.output_text.strip().lower()
+        return decision.startswith("true")
+    except Exception:
+        return False

@@ -1,0 +1,29 @@
+{
+    "retrieval": {
+        "max_distance": 0.6
+    },
+    "usefulness_filter": {
+        "min_word_count": 3,
+        "min_char_count": 15,
+        "blacklist_phrases": [
+            "what did i say",
+            "when did i tell you",
+            "do you remember",
+            "remember that",
+            "ok",
+            "okay",
+            "thanks",
+            "thank you",
+            "hmm",
+            "yes",
+            "no",
+            "haha",
+            "lol",
+            "idk"
+        ]
+    },
+    "context_decider": {
+        "continuity_base": 0.45,
+        "continuity_std_factor": 0.15
+    }
+}
