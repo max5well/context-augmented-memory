@@ -1,22 +1,34 @@
+"""
+modules/llm_client.py
+Handles interaction with the LLM (OpenAI API or compatible).
+"""
+
+import os
 from openai import OpenAI
 from dotenv import load_dotenv
-import os
 
+# Load environment variables
 load_dotenv()
+
+# Initialize the OpenAI client
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-def generate_response(user_prompt: str, model="gpt-4o-mini"):
-    """Generate an LLM response and return text + metadata."""
-    resp = client.responses.create(model=model, input=user_prompt, temperature=0)
-    content = resp.output[0].content[0].text
 
-    metadata = {
-        "timestamp": resp.created_at,
-        "model": resp.model,
-        "temperature": resp.temperature,
-        "input_tokens": resp.usage.input_tokens,
-        "output_tokens": resp.usage.output_tokens,
-        "total_tokens": resp.usage.total_tokens,
-    }
+def ask(prompt: str, model: str = "gpt-4o-mini", temperature: float = 0.7) -> str:
+    """
+    Send a prompt to the LLM and return the response text.
+    """
+    try:
+        response = client.responses.create(
+            model=model,
+            input=prompt,
+            temperature=temperature,
+        )
 
-    return content, metadata
+        # Extract response text safely
+        output = response.output[0].content[0].text
+        return output
+
+    except Exception as e:
+        print(f"❌ LLM request failed: {e}")
+        return "(Error: LLM request failed)"

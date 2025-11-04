@@ -1,19 +1,16 @@
-cat > .gitignore <<'EOF'
-# Python
+# Python cache / virtual env
 __pycache__/
 *.pyc
-
-# Venv
 .venv/
 
 # Secrets
 .env
 
-# Chroma / Datenbanken
+# Local Chroma data
 chroma_db/
+*.sqlite3
 
-# OS / IDE
+# IDE / system files
 .DS_Store
 .idea/
 .vscode/
-EOF

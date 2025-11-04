@@ -1,63 +1,60 @@
-# modules/retrieval.py
+"""
+modules/retrieval.py
+Handles retrieval of relevant context from Chroma memory.
+"""
 
-import chromadb
-from chromadb.config import Settings
+import modules.memory as memory
+from typing import List, Tuple, Dict
 
-# --- Configuration ---
-CHROMA_HOST = "localhost"
-CHROMA_PORT = 8000
-MAX_DISTANCE = 0.25  # Lower = stricter. Adjust based on your embedding model.
+# Configurable distance threshold
+MAX_DISTANCE = 0.6  # more forgiving to ensure matches are found
 
-# --- Initialize Chroma client ---
-def get_chroma_client():
-    """Return a Chroma v2 client."""
-    return chromadb.Client(Settings(
-        chroma_server_host=CHROMA_HOST,
-        chroma_server_http_port=CHROMA_PORT,
-        chroma_api_impl="chromadb.api.fastapi.FastAPI",
-    ))
 
-# --- Retrieval logic ---
-def retrieve_context(query: str, n_results: int = 5):
+def retrieve_context(query: str, n_results: int = 5) -> str:
     """
     Retrieve relevant past memory entries for a given query.
-    Returns a formatted context block or an empty string.
+    Filters by distance threshold and returns a formatted context string.
     """
-    client = get_chroma_client()
-    collection = client.get_or_create_collection(name="CAM_Collection")
-
-    results = collection.query(
+    results = memory.collection.query(
         query_texts=[query],
         n_results=n_results,
         include=["documents", "distances", "metadatas"],
     )
 
-    if not results or not results.get("documents"):
-        print("⚠️ No matching memory found.")
+    # Debug output to verify raw query results
+    print("\n🔍 Raw retrieval results:")
+    print(results)
+
+    if not results or not results.get("documents") or not results["documents"][0]:
+        print("⚠️ No matching memory found (empty results).")
         return ""
 
     docs = results["documents"][0]
     distances = results["distances"][0]
     metadatas = results["metadatas"][0]
 
-    relevant = []
-    for doc, dist, meta in zip(docs, distances, metadatas):
-        if dist <= MAX_DISTANCE:
-            relevant.append((doc, dist, meta))
+    # Combine and filter by distance
+    relevant: List[Tuple[str, float, Dict]] = [
+        (doc, dist, meta)
+        for doc, dist, meta in zip(docs, distances, metadatas)
+        if dist <= MAX_DISTANCE
+    ]
 
-    if not relevant:
-        print(f"⚠️ No relevant items under distance threshold ({MAX_DISTANCE}).")
-        return ""
+    # If nothing under threshold, take top result for debugging visibility
+    if not relevant and docs:
+        print(f"⚠️ No results under threshold ({MAX_DISTANCE}), returning closest match.")
+        relevant = [(docs[0], distances[0], metadatas[0])]
 
-    # Build the formatted context block
-    context_lines = []
-    for doc, dist, meta in relevant:
-        tag = meta.get("tag", "unknown")
-        context_lines.append(
-            f"[Memory — tag: {tag} | distance: {dist:.3f}]\n{doc}\n"
-        )
+    # Format retrieved content
+    context_lines = [
+        f"[Memory — tag: {meta.get('tag', 'unknown')} | distance: {dist:.3f}]\n{doc}\n"
+        for doc, dist, meta in relevant
+    ]
 
-    context_block = "\n---\n".join(context_lines)
-    print(f"✅ Retrieved {len(relevant)} relevant memories (≤ {MAX_DISTANCE})")
+    print(f"✅ Retrieved {len(relevant)} relevant memories (distance ≤ {MAX_DISTANCE})")
 
-    return context_block
+    # Join context into one text block
+    context_text = "\n---\n".join(context_lines)
+
+    # Return for use in main.py
+    return context_text

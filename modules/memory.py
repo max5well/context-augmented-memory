@@ -1,52 +1,40 @@
-# modules/retrieval.py
 """
-Handles retrieval of relevant context from Chroma memory.
-Reuses the shared Chroma collection from memory.py.
+modules/memory.py
+Handles storing and accessing memory in Chroma.
 """
 
-from modules.memory import collection
-from typing import List, Tuple, Dict
+import chromadb
+from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
+from nanoid import generate
+import os
 
-# Configurable distance threshold
-MAX_DISTANCE = 0.25  # Lower = stricter; tune per embedding model
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+# --- Initialize Chroma client (persistent local DB) ---
+client = chromadb.PersistentClient(path="./chroma_db")
+
+# --- Embedding function ---
+embedder = SentenceTransformerEmbeddingFunction(model_name="all-MiniLM-L6-v2")
+
+# --- Shared Chroma collection ---
+collection = client.get_or_create_collection(
+    name="CAM_collection",
+    embedding_function=embedder,
+)
 
 
-def retrieve_context(query: str, n_results: int = 5) -> str:
+def add_episode(prompt: str, llm_output: str, metadata: dict) -> str:
     """
-    Retrieve relevant past memory entries for a given query.
-    Filters by distance threshold and returns a context string.
+    Store an interaction (prompt + output + metadata) into Chroma.
     """
-    results = collection.query(
-        query_texts=[query],
-        n_results=n_results,
-        include=["documents", "distances", "metadatas"],
+    episode_id = generate(size=12)
+
+    # Each entry stores the model output as the document
+    collection.add(
+        ids=[episode_id],
+        documents=[promp],
+        metadatas=[metadata],
     )
 
-    if not results or not results.get("documents"):
-        print("⚠️ No matching memory found.")
-        return ""
-
-    docs = results["documents"][0]
-    distances = results["distances"][0]
-    metadatas = results["metadatas"][0]
-
-    # Filter by distance
-    relevant: List[Tuple[str, float, Dict]] = [
-        (doc, dist, meta)
-        for doc, dist, meta in zip(docs, distances, metadatas)
-        if dist <= MAX_DISTANCE
-    ]
-
-    if not relevant:
-        print(f"⚠️ No relevant items under distance threshold ({MAX_DISTANCE}).")
-        return ""
-
-    # Build formatted text block
-    context_lines = [
-        f"[Memory — tag: {meta.get('tag', 'unknown')} | distance: {dist:.3f}]\n{doc}\n"
-        for doc, dist, meta in relevant
-    ]
-
-    print(f"✅ Retrieved {len(relevant)} relevant memories (distance ≤ {MAX_DISTANCE})")
-
-    return "\n---\n".join(context_lines)
+    print(f"✅ Added episode {episode_id}")
+    return episode_id

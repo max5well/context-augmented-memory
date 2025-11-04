@@ -1,4 +1,3 @@
-import main
 import chromadb
 from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 from nanoid import generate
