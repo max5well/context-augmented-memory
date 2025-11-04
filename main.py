@@ -3,7 +3,7 @@ main.py
 Main entry point for the Context-Augmented Memory (CAM) system.
 """
 
-from modules import llm_client, auto_tagger, memory, retrieval
+from modules import llm_client, auto_tagger, memory, retrieval, context_decider
 from datetime import datetime
 from nanoid import generate
 import os
@@ -34,8 +34,15 @@ def main():
                 print("⚠️ No memory entries to clear.\n")
             continue
 
-        # --- Retrieve relevant context ---
-        context = retrieval.retrieve_context(user_prompt)
+        # --- 🧠 Context continuity check ---
+        should_use_context = context_decider.should_retrieve(user_prompt)
+        context = ""
+
+        if should_use_context:
+            print("🔎 Semantic continuity detected — retrieving context...")
+            context = retrieval.retrieve_context(user_prompt)
+        else:
+            print("⚙️ New topic detected — skipping retrieval.")
 
         if context:
             print("\n📚 Retrieved context found — augmenting your prompt...\n")
@@ -47,28 +54,31 @@ def main():
         else:
             full_prompt = user_prompt
 
-        # --- Send to LLM ---
+        # --- 💬 Send to LLM ---
         print("💬 Sending prompt to LLM...\n")
         llm_output = llm_client.ask(full_prompt)
 
-        # --- Tag and store memory ---
+        # --- 🏷️ Tag and store memory ---
         selected_tag = auto_tagger.auto_tag(user_prompt)
         episode_id = generate(size=12)
         metadata = {
             "timestamp": datetime.utcnow().isoformat(),
             "user_prompt": user_prompt,
             "tag": selected_tag,
+            # ✅ store as string ("true"/"false") for Chroma compatibility
+            "topic_continued": str(should_use_context).lower(),
         }
 
         memory.collection.add(
             ids=[episode_id],
-            documents=[user_prompt],  # ✅ store user input, not model output
+            documents=[user_prompt],  # store only user input for embeddings
             metadatas=[metadata],
         )
 
+
         print(f"✅ Added episode {episode_id}\n")
         print("🤖 LLM Output:\n", llm_output)
-        print(f"\n🧠 Episode {episode_id} stored (tag: {selected_tag})")
+        print(f"\n🧠 Episode {episode_id} stored (tag: {selected_tag}, continued: {should_use_context})")
         print("-" * 60 + "\n")
 
 
