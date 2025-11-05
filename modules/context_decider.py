@@ -48,6 +48,10 @@ def should_retrieve(user_prompt: str) -> bool:
 def cosine_similarities(vec, others: List[List[float]]) -> List[float]:
     """Computes cosine similarities between vec and each vector in others."""
     def cosine(a, b):
+        if len(a) != len(b):  # safeguard for dimension mismatch
+            print(f"⚠️ Skipping embedding with mismatched dimension: {len(a)} vs {len(b)}")
+            return None
         return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
 
-    return [cosine(vec, other) for other in others if other]
+    sims = [cosine(vec, other) for other in others if other is not None]
+    return [s for s in sims if s is not None]
