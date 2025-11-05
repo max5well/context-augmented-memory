@@ -11,7 +11,6 @@ from typing import List, Tuple, Dict
 config = config_manager.load_config()
 MAX_DISTANCE = config["retrieval"]["max_distance"]
 
-
 def retrieve_context(query: str, n_results: int = 5, include_meta: bool = False) -> str:
     """
     Retrieves relevant memory entries for a given query.
@@ -36,6 +35,12 @@ def retrieve_context(query: str, n_results: int = 5, include_meta: bool = False)
     distances = results["distances"][0]
     metadatas = results["metadatas"][0]
 
+    # ✅ DEBUG: Log all retrieved memory entries with distances
+    print("🔍 Retrieved memory candidates:")
+    for doc, dist, meta in zip(docs, distances, metadatas):
+        print(f"• distance={dist:.3f} | tag={meta.get('tag', 'NONE')} | preview: {doc[:80]}")
+
+    # Filter by distance threshold
     relevant: List[Tuple[str, float, Dict]] = [
         (doc, dist, meta)
         for doc, dist, meta in zip(docs, distances, metadatas)
@@ -46,7 +51,7 @@ def retrieve_context(query: str, n_results: int = 5, include_meta: bool = False)
         print(f"⚠️ No relevant items under distance threshold ({MAX_DISTANCE}).")
         return ""
 
-    # Build output
+    # Build output string from relevant memory entries
     if include_meta:
         context_lines = [
             f"[Meta — tag: {meta.get('tag', 'NONE')} | date: {meta.get('timestamp', 'unknown')}]"
@@ -55,8 +60,7 @@ def retrieve_context(query: str, n_results: int = 5, include_meta: bool = False)
         ]
     else:
         context_lines = [
-            f"[Memory — tag: {meta.get('tag', 'NONE')} | distance: {dist:.3f}]"
-            f"\n{doc}\n"
+            f"[Memory — tag: {meta.get('tag', 'NONE')} | distance: {dist:.3f}]\n{doc}"
             for doc, dist, meta in relevant
         ]
 
