@@ -1,8 +1,4 @@
-"""
-modules/llm_client.py
-Handles interaction with the LLM (OpenAI API or compatible).
-"""
-
+# modules/llm_client.py
 import os
 from openai import OpenAI
 from dotenv import load_dotenv
@@ -12,7 +8,6 @@ load_dotenv()
 
 # Initialize the OpenAI client
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
 
 def ask(prompt: str, model: str = "gpt-4o-mini", temperature: float = 0.7) -> str:
     """
