@@ -1,128 +1,105 @@
 """
 main.py
-Main entry point for the Context-Augmented Memory (CAM) system.
-Handles retrieval, context management, and LLM interaction.
+Standalone CLI runner for Context-Augmented Memory (CAM)
+Now explicitly passes embedding vectors to Chroma after disabling auto-embedding.
 """
 
 import os
-from datetime import datetime
-from nanoid import generate
+import datetime
+from openai import OpenAI
 from modules import (
-    llm_client,
-    auto_tagger,
+    embedding,
     memory,
     retrieval,
-    context_decider,
-    usefulness_filter,
+    auto_tagger,
     intent_classifier,
-    config_manager
+    context_decider,
+    config_manager,
 )
+from uuid import uuid4
 
-# Silence tokenizer parallelism warnings
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
-
-# Load config (includes retrieval threshold, filters, etc.)
+# --- Initialize client ---
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 config = config_manager.load_config()
+
+print("🧠 Context-Augmented Memory System (CAM)")
+print("Type 'exit' to quit or 'clear memory' to reset stored context.\n")
 
 
 def main():
-    print("🧠 Context-Augmented Memory System (CAM)")
-    print("Type 'exit' to quit or 'clear memory' to reset stored context.\n")
-
     while True:
         user_prompt = input("Enter your prompt: ").strip()
-
-        # --- Quit command ---
-        if user_prompt.lower() == "exit":
-            break
-
-        # --- 🧹 Memory clear command ---
-        if user_prompt.lower() in {"clear memory", "reset memory"}:
-            try:
-                ids = memory.collection.get()["ids"]
-                if ids:
-                    memory.collection.delete(ids=ids)
-                    print("🧹 Memory cleared.\n")
-                else:
-                    print("ℹ️ No memories to clear.\n")
-            except Exception as e:
-                print(f"⚠️ Could not clear memory: {e}")
+        if not user_prompt:
             continue
 
-        # --- Context retrieval decision ---
-        should_use_context = context_decider.should_retrieve(user_prompt)
-        context = ""
+        if user_prompt.lower() in ["exit", "quit"]:
+            break
+        if user_prompt.lower() in ["clear memory", "reset"]:
+            os.system("rm -rf CAM_project/chroma_db")
+            print("🧹 Memory cleared.")
+            continue
 
-        # --- Detect meta-memory queries ---
-        meta_query_triggers = config.get(
-            "meta_queries",
-            [
-                "when did",
-                "where did",
-                "how many times",
-                "remember when",
-                "did i tell",
-                "show me my",
-                "what did i say",
-                "when was the last time",
-            ],
-        )
+        # Step 1 — Decide whether to use memory retrieval
+        try:
+            should_use_context = context_decider.should_retrieve(user_prompt)
+        except Exception as e:
+            print(f"⚠️ Retrieval decision failed: {e}")
+            should_use_context = False
 
-        is_meta_query = any(trigger in user_prompt.lower() for trigger in meta_query_triggers)
-
-        # --- Retrieval Logic ---
         if should_use_context:
-            if is_meta_query:
-                print("🕓 Meta-memory query detected — retrieving with metadata...\n")
-                context = retrieval.retrieve_context(user_prompt, include_meta=True)
-            else:
-                print("🔎 Semantic continuity detected — retrieving context...\n")
-                context = retrieval.retrieve_context(user_prompt)
-
-        # --- Build augmented prompt ---
-        if context:
-            print("\n📚 Retrieved context found — augmenting your prompt...\n")
-            full_prompt = (
-                "You have access to the user's long-term memory. "
-                "Treat the following stored facts as true unless contradicted by the user.\n\n"
-                f"Memory facts:\n{context}\n\n"
-                f"Now answer the user's question:\n{user_prompt}"
-            )
+            print("🔎 Semantic continuity detected — retrieving context...\n")
+            context = retrieval.retrieve_context(user_prompt)
+            full_prompt = f"{context}\n\nUser: {user_prompt}"
         else:
+            print("⚙️ New topic detected — skipping retrieval.")
             full_prompt = user_prompt
 
-        # --- Send to LLM ---
+        # Step 2 — Send to LLM
         print("💬 Sending prompt to LLM...\n")
-        llm_output = llm_client.ask(full_prompt)
+        try:
+            response = client.responses.create(
+                model="gpt-4o-mini",
+                input=full_prompt,
+            )
+            llm_output = response.output_text.strip()
+        except Exception as e:
+            print(f"❌ LLM request failed: {e}")
+            llm_output = "(Error: LLM request failed)"
+
         print(f"\n🤖 LLM Output:\n {llm_output}\n")
 
-        # --- Prepare metadata ---
-        episode_id = generate(size=12)
-        timestamp = datetime.now().isoformat()
-        selected_tag = auto_tagger.auto_tag(user_prompt)
-        intent_type = intent_classifier.classify_intent(user_prompt)
+        # Step 3 — Intent and tagging
+        intent = intent_classifier.classify_intent(user_prompt)
+        if intent in ["meta", "query"]:
+            print("🚫 Skipped storing trivial, query, or meta prompt.")
+            print("------------------------------------------------------------\n")
+            continue
 
-        metadata = {
-            "timestamp": timestamp,
+        tag = auto_tagger.auto_tag(user_prompt)
+
+        # Step 4 — Prepare metadata
+        episode_id = str(uuid4())[:12]
+        meta = {
+            "episode_id": episode_id,
+            "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+            "session_id": f"sess_{datetime.datetime.utcnow().strftime('%Y%m%d_%H%M%S')}",
+            "provider": "openai",
+            "model": "gpt-4o-mini",
+            "schema_version": "2025-11",
             "user_prompt": user_prompt,
-            "tag": selected_tag,
-            "topic_continued": str(should_use_context),
-            "intent": intent_type,
+            "tag": tag,
+            "intent": intent,
+            "topic_continued": should_use_context,
         }
 
-        # --- Filter trivial or context-dependent prompts ---
-        if usefulness_filter.is_useful(user_prompt):
-            memory.collection.add(
-                ids=[episode_id],
-                documents=[llm_output],
-                metadatas=[metadata],
-            )
-            print(
-                f"🧠 Episode {episode_id} stored (tag: {selected_tag}, continued: {should_use_context})"
-            )
-        else:
-            print("🚫 Skipped storing trivial, query, or meta prompt.")
+        # Step 5 — Generate embedding and store in Chroma
+        try:
+            embedding_vector = embedding.get_embedding(llm_output)
+            memory.store(llm_output, meta, embedding_vector)
+        except Exception as e:
+            print(f"❌ Failed to store memory: {e}")
 
+        print(f"🧠 Episode {episode_id} stored (tag: {tag}, continued: {should_use_context})")
         print("------------------------------------------------------------\n")
 
 
