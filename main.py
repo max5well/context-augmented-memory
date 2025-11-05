@@ -2,6 +2,7 @@
 main.py
 Standalone CLI runner for Context-Augmented Memory (CAM)
 Now explicitly passes embedding vectors to Chroma after disabling auto-embedding.
+Also enhances context injection to treat retrieved memory as factual knowledge.
 """
 
 import os
@@ -46,15 +47,30 @@ def main():
             print(f"⚠️ Retrieval decision failed: {e}")
             should_use_context = False
 
+        context = ""
         if should_use_context:
             print("🔎 Semantic continuity detected — retrieving context...\n")
             context = retrieval.retrieve_context(user_prompt)
-            full_prompt = f"{context}\n\nUser: {user_prompt}"
+
+        # Step 2 — Build LLM prompt with stronger factual context
+        if context:
+            full_prompt = f"""You are an AI assistant with perfect memory.
+
+Use the following retrieved context as **factual information**.
+Treat these statements as absolute truth — never express uncertainty about them.
+
+---
+{context}
+---
+
+Now respond naturally to the user's latest input, staying consistent with those facts.
+User: {user_prompt}
+"""
         else:
             print("⚙️ New topic detected — skipping retrieval.")
             full_prompt = user_prompt
 
-        # Step 2 — Send to LLM
+        # Step 3 — Send to LLM
         print("💬 Sending prompt to LLM...\n")
         try:
             response = client.responses.create(
@@ -68,7 +84,7 @@ def main():
 
         print(f"\n🤖 LLM Output:\n {llm_output}\n")
 
-        # Step 3 — Intent and tagging
+        # Step 4 — Intent and tagging
         intent = intent_classifier.classify_intent(user_prompt)
         if intent in ["meta", "query"]:
             print("🚫 Skipped storing trivial, query, or meta prompt.")
@@ -77,7 +93,7 @@ def main():
 
         tag = auto_tagger.auto_tag(user_prompt)
 
-        # Step 4 — Prepare metadata
+        # Step 5 — Prepare metadata
         episode_id = str(uuid4())[:12]
         meta = {
             "episode_id": episode_id,
@@ -89,10 +105,10 @@ def main():
             "user_prompt": user_prompt,
             "tag": tag,
             "intent": intent,
-            "topic_continued": should_use_context,
+            "topic_continued": bool(should_use_context),
         }
 
-        # Step 5 — Generate embedding and store in Chroma
+        # Step 6 — Generate embedding and store in Chroma
         try:
             embedding_vector = embedding.get_embedding(llm_output)
             memory.store(llm_output, meta, embedding_vector)
