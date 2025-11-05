@@ -3,8 +3,8 @@
 from fastapi import APIRouter, Request
 from proxy_api.clients import provider_router
 from proxy_api.services.context_injector import inject_context_if_relevant, store_to_memory
-from proxy_api.services.normalize_output import normalize_response, fallback_normalize
 from modules import auto_tagger, memory
+from modules.normalizer import normalize_output
 
 router = APIRouter()
 
@@ -26,25 +26,18 @@ async def chat_completions(request: Request):
     # Step 2 — Route to appropriate provider
     llm_output = provider_router.ask(full_prompt, api_key=api_key, model=model)
 
-    # Step 3 — Normalize response structure
-    normalized = normalize_response(llm_output)
-    if not normalized:
-        print("⚠️ Output normalization failed. Running fallback model...")
-        normalized = fallback_normalize(llm_output, user_prompt)
-        print("⚠️ Admin alert: Output required fallback normalization. Please review.")
+    # Step 3 — Normalize output and metadata
+    provider = provider_router.detect_provider(api_key=api_key, model=model)
+    normalized = normalize_output(user_prompt, llm_output, model=model, provider=provider)
 
-    # Step 4 — Extract cleaned text + metadata
+    # Step 4 — Extract cleaned text + full metadata
     cleaned_text = normalized.get("text", llm_output)
     metadata = normalized.get("metadata", {})
 
-    # Auto-tag fallback if none set
-    if not metadata.get("tag"):
-        metadata["tag"] = auto_tagger.auto_tag(user_prompt)
+    # Step 5 — Store to memory with full metadata
+    store_to_memory(user_prompt, cleaned_text, metadata=metadata)
 
-    # Step 5 — Store in memory
-    store_to_memory(user_prompt, cleaned_text, tag=metadata["tag"], continued=metadata.get("topic_continued", True))
-
-    # Step 6 — Return OpenAI-style response
+    # Step 6 — Return OpenAI-compatible response
     return {
         "id": "cmpl-proxy-001",
         "object": "chat.completion",
