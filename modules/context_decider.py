@@ -1,52 +1,63 @@
-"""
-modules/context_decider.py
-Determines whether to perform retrieval based on context similarity and memory state.
-"""
+# modules/maintenance/context_decider.py
 
+from modules.maintenance import embedding, memory, config_manager, usefulness_filter
+from typing import List
 import numpy as np
-from modules import memory
 
+config = config_manager.load_config()
+BASE = config["context_decider"]["continuity_base"]
+STD_FACTOR = config["context_decider"]["continuity_std_factor"]
 
-def should_retrieve(user_prompt: str, α: float = 0.5) -> bool:
+def should_continue_topic(similarity_scores: List[float]) -> bool:
     """
-    Determines whether to perform retrieval based on semantic continuity.
-    Uses average distance of the last few entries to detect topic changes.
+    Used in API context — decides whether new prompt continues the previous topic.
     """
-
-    # Fetch a small sample of recent items from memory
-    results = memory.collection.get(limit=50, include=["documents", "metadatas"])
-
-    if not results or not results.get("documents"):
-        print("ℹ️ No past context found — retrieval will be skipped.")
+    if not similarity_scores:
         return False
 
-    # Use metadata or fallback text for rough similarity reference
-    docs = results["documents"]
-    if not docs or len(docs[0]) == 0:
+    avg = np.mean(similarity_scores)
+    std_dev = np.std(similarity_scores)
+    threshold = BASE + (std_dev * STD_FACTOR)
+
+    print(f"📊 [Topic Decision] avg_sim={avg:.3f} std_dev={std_dev:.3f} → threshold={threshold:.3f}")
+    return avg > threshold
+
+
+def should_retrieve(user_prompt: str) -> bool:
+    """
+    Used in CLI mode (main.py). Decides whether to retrieve based on:
+    - usefulness filter
+    - embedding similarity
+    - dynamic thresholding
+    """
+    if not usefulness_filter.is_useful(user_prompt):
+        print("⚠️ Skipping trivial or meta prompt.")
         return False
 
-    # Compute a simple similarity estimate via Chroma query
-    check = memory.collection.query(
-        query_texts=[user_prompt],
-        n_results=1,
-        include=["distances"]
-    )
+    # Embed current prompt
+    current_vec = embedding.embed(user_prompt)
 
-    if not check or not check.get("distances") or not check["distances"][0]:
-        print("⚠️ Could not compute similarity; skipping retrieval.")
+    # Get past embeddings (last N items)
+    past = memory.collection.get(include=["embeddings"], limit=5)
+    previous_vecs = past.get("embeddings", [])
+
+    if not previous_vecs:
+        print("⚠️ No previous embeddings — skipping retrieval.")
         return False
 
-    distance = check["distances"][0][0]
-    print(f"🔍 Context similarity to recent memory: {distance:.3f}")
+    # Compute cosine similarities
+    sims = cosine_similarities(current_vec, previous_vecs)
+    avg = np.mean(sims)
+    std_dev = np.std(sims)
+    threshold = BASE + (std_dev * STD_FACTOR)
 
-    # Dynamically determine threshold from recent patterns
-    last_50_distances = np.clip(np.random.normal(0.4, 0.1, 50), 0, 1)  # placeholder fallback
-    CONTINUITY_THRESHOLD = np.mean(last_50_distances) + α * np.std(last_50_distances)
+    print(f"📊 [CLI Topic Decision] avg_sim={avg:.3f} std_dev={std_dev:.3f} → threshold={threshold:.3f}")
+    return avg > threshold
 
-    # Decide
-    if distance < CONTINUITY_THRESHOLD:
-        print("🔁 Continuing topic — retrieval enabled.")
-        return True
-    else:
-        print("⚙️ New topic detected — skipping retrieval.")
-        return False
+
+def cosine_similarities(vec, others: List[List[float]]) -> List[float]:
+    """Computes cosine similarities between vec and each vector in others."""
+    def cosine(a, b):
+        return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+
+    return [cosine(vec, other) for other in others if other]

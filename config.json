@@ -23,7 +23,7 @@
         ]
     },
     "context_decider": {
-        "continuity_base": 0.45,
+        "continuity_base": 0.40,
         "continuity_std_factor": 0.15
     }
 }
