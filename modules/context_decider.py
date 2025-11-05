@@ -35,7 +35,7 @@ def should_retrieve(user_prompt: str) -> bool:
         return False
 
     # Embed current prompt
-    current_vec = embedding.embed(user_prompt)
+    current_vec = embedding.get_embedding(user_prompt)
 
     # Get past embeddings (last N items)
     past = memory.collection.get(include=["embeddings"], limit=5)
