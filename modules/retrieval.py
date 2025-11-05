@@ -28,7 +28,8 @@ def retrieve_context(
     - "global" → relaxed threshold for long-term factual recall
     """
 
-    where_filter = {} if include_meta else {"intent": "fact"}
+    # ✅ FIX: use None when no where-filter is needed
+    where_filter = None if include_meta else {"intent": "fact"}
 
     # --- Generate query embedding manually ---
     query_vector = embedding.get_embedding(query)
@@ -44,6 +45,7 @@ def retrieve_context(
         include=["documents", "distances", "metadatas"],
     )
 
+    # --- Validate results ---
     if not results or not results.get("documents") or not results["documents"][0]:
         print("⚠️ No matching memory found.")
         return ""
@@ -64,7 +66,10 @@ def retrieve_context(
     if not relevant and distances:
         avg_dist = np.mean(distances)
         new_threshold = min(avg_dist + 0.15, 0.95)
-        print(f"⚙️ Relaxing threshold {threshold:.2f} → {new_threshold:.2f} (avg_dist={avg_dist:.3f})")
+        print(
+            f"⚙️ Relaxing threshold {threshold:.2f} → {new_threshold:.2f} "
+            f"(avg_dist={avg_dist:.3f})"
+        )
 
         relevant = [
             (doc, dist, meta)
@@ -91,5 +96,8 @@ def retrieve_context(
             for doc, dist, meta in relevant
         ]
 
-    print(f"✅ Retrieved {len(relevant)} relevant memories (mode={mode}, distance ≤ {threshold:.2f})")
+    print(
+        f"✅ Retrieved {len(relevant)} relevant memories "
+        f"(mode={mode}, distance ≤ {threshold:.2f})"
+    )
     return "\n---\n".join(context_lines)
