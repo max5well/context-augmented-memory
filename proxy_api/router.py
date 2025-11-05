@@ -1,10 +1,13 @@
 # proxy_api/router.py
+
 from fastapi import APIRouter, Request
 from proxy_api.clients import provider_router
 from proxy_api.services.context_injector import inject_context_if_relevant, store_to_memory
-from modules import auto_tagger
+from proxy_api.services.normalize_output import normalize_response, fallback_normalize
+from modules import auto_tagger, memory
 
 router = APIRouter()
+
 
 @router.post("/v1/chat/completions")
 async def chat_completions(request: Request):
@@ -17,17 +20,31 @@ async def chat_completions(request: Request):
 
     print(f"🧠 Incoming chat via proxy (model: {model})")
 
-    # Step 1 — inject context from memory
+    # Step 1 — Inject memory context before prompt
     full_prompt = inject_context_if_relevant(user_prompt)
 
-    # Step 2 — route to appropriate model provider
+    # Step 2 — Route to appropriate provider
     llm_output = provider_router.ask(full_prompt, api_key=api_key, model=model)
 
-    # Step 3 — store result in memory
-    tag = auto_tagger.auto_tag(user_prompt)
-    store_to_memory(user_prompt, llm_output, tag=tag, continued=True)
+    # Step 3 — Normalize response structure
+    normalized = normalize_response(llm_output)
+    if not normalized:
+        print("⚠️ Output normalization failed. Running fallback model...")
+        normalized = fallback_normalize(llm_output, user_prompt)
+        print("⚠️ Admin alert: Output required fallback normalization. Please review.")
 
-    # Step 4 — return standard OpenAI-style response
+    # Step 4 — Extract cleaned text + metadata
+    cleaned_text = normalized.get("text", llm_output)
+    metadata = normalized.get("metadata", {})
+
+    # Auto-tag fallback if none set
+    if not metadata.get("tag"):
+        metadata["tag"] = auto_tagger.auto_tag(user_prompt)
+
+    # Step 5 — Store in memory
+    store_to_memory(user_prompt, cleaned_text, tag=metadata["tag"], continued=metadata.get("topic_continued", True))
+
+    # Step 6 — Return OpenAI-style response
     return {
         "id": "cmpl-proxy-001",
         "object": "chat.completion",
@@ -35,19 +52,18 @@ async def chat_completions(request: Request):
         "choices": [
             {
                 "index": 0,
-                "message": {"role": "assistant", "content": llm_output},
+                "message": {"role": "assistant", "content": cleaned_text},
                 "finish_reason": "stop",
             }
         ],
     }
 
-# --- Memory Debug Endpoint ---
-from modules import memory
 
+# --- Memory Debug Endpoint ---
 @router.get("/v1/memory/debug")
 async def memory_debug():
     """
-    Returns a preview of the stored memories in Chroma.
+    Preview a few memory records from Chroma.
     """
     try:
         data = memory.collection.get(limit=5)

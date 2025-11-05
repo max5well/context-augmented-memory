@@ -1,70 +1,88 @@
 # proxy_api/utils/normalizer.py
 
-import uuid
-from datetime import datetime
-from proxy_api.utils.fallback_llm import recover_response_format  # You’ll create this next
+import json
+import os
 
-def normalize_response(raw, provider="openai", prompt="(unknown)") -> dict:
-    """
-    Normalize different LLM response formats to a consistent structure.
-    Adds full metadata block for storage in CAM memory.
-    """
-    now = datetime.utcnow().isoformat()
+from openai import OpenAI
+from dotenv import load_dotenv
 
+load_dotenv()
+
+FALLBACK_LLM_MODEL = os.getenv("OPENAI_API_MODEL", "gpt-3.5-turbo")
+FALLBACK_LLM_KEY = os.getenv("OPENAI_API_KEY")
+
+client = OpenAI(api_key=FALLBACK_LLM_KEY)
+
+
+def normalize_response_with_fallback(raw_response: str, model: str, prompt: str) -> tuple[str, dict]:
+    """
+    Attempts to extract the assistant message and metadata from a raw LLM response.
+    Falls back to LLM-based interpretation if the structure is unknown.
+    Returns: (normalized_content: str, metadata: dict)
+    """
+    # Case 1: known OpenAI-compatible format
     try:
-        # === Try OpenAI/Anthropic/Mistral ===
-        if provider in ["openai", "mistral"]:
-            message = raw["choices"][0]["message"]
-            content = message["content"]
-        elif provider == "anthropic":
-            content = raw["completion"]
-        elif provider == "gemini":
-            content = raw["candidates"][0]["content"]["parts"][0]["text"]
-        else:
-            raise ValueError("Unknown provider")
+        data = json.loads(raw_response) if isinstance(raw_response, str) else raw_response
 
-        return {
-            "prompt": prompt,
-            "response": content.strip(),
-            "metadata": {
-                "episode_id": f"ep-{uuid.uuid4().hex[:10]}",
-                "timestamp": now,
-                "provider": provider,
-                "model": raw.get("model", "unknown"),
-                "tag": "UNKNOWN",
-                "intent": "UNKNOWN",
-                "topic_continued": True,
-                "reward": 0.5,
-                "session_id": f"sess-{now[:10]}",
-
-                # optional diagnostics
-                "alert": None,
-                "raw_response_structure": "standard",
-                "usage": raw.get("usage", {}),
+        if isinstance(data, dict) and "choices" in data:
+            content = data["choices"][0]["message"]["content"]
+            metadata = {
+                "model": data.get("model"),
+                "provider": detect_provider_from_model(data.get("model", "")),
+                "raw": data
             }
-        }
+            return content, metadata
+
+    except Exception:
+        pass  # fallback below
+
+    # Case 2: unknown format — use fallback LLM to parse it
+    try:
+        system_prompt = f"""
+You are a normalization engine. Your job is to take raw LLM responses and extract:
+1. The assistant's main reply message (as clean string).
+2. Metadata like model name, provider if available.
+
+Return a JSON like:
+{{ "content": "...", "metadata": {{ "model": "...", "provider": "...", "notes": "..." }} }}
+"""
+
+        messages = [
+            {"role": "system", "content": system_prompt.strip()},
+            {"role": "user", "content": f"Prompt: {prompt}\n\nRaw Response:\n{raw_response}"}
+        ]
+
+        print("⚠️ Unknown format — triggering fallback normalizer")
+
+        completion = client.chat.completions.create(
+            model=FALLBACK_LLM_MODEL,
+            messages=messages,
+            temperature=0.2,
+        )
+
+        result = completion.choices[0].message.content
+        parsed = json.loads(result)
+
+        return parsed.get("content", ""), parsed.get("metadata", {})
 
     except Exception as e:
-        # === Fallback: structure via LLM ===
-        fallback = recover_response_format(raw)
+        print(f"❌ Fallback normalization failed: {e}")
+        return str(raw_response), {"fallback": True, "error": str(e)}
 
-        return {
-            "prompt": prompt,
-            "response": fallback.get("response", ""),
-            "metadata": {
-                "episode_id": f"ep-{uuid.uuid4().hex[:10]}",
-                "timestamp": now,
-                "provider": provider,
-                "model": raw.get("model", "unknown"),
-                "tag": "UNKNOWN",
-                "intent": "UNKNOWN",
-                "topic_continued": True,
-                "reward": 0.0,
-                "session_id": f"sess-{now[:10]}",
 
-                "alert": f"⚠️ Unexpected format for provider: {provider} — Admin should verify",
-                "raw_response_structure": "recovered",
-                "error": str(e),
-                "raw": str(raw)[:500]  # truncate for safety
-            }
-        }
+def detect_provider_from_model(model: str) -> str:
+    """
+    Maps model name patterns to known providers.
+    """
+    model = model.lower()
+
+    if model.startswith("gpt-") or model.startswith("text-"):
+        return "openai"
+    elif model.startswith("claude-"):
+        return "anthropic"
+    elif model.startswith("mistral-"):
+        return "mistral"
+    elif "gemini" in model:
+        return "gemini"
+    else:
+        return "unknown"
