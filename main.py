@@ -1,7 +1,10 @@
 """
 main.py
 Standalone CLI runner for Context-Augmented Memory (CAM)
-Now includes a short-term sliding context window for factual continuity.
+Includes:
+- short-term sliding context window for factual continuity
+- robust dual-mode retrieval
+- safe metadata serialization for Chroma
 """
 
 import os
@@ -28,6 +31,22 @@ print("Type 'exit' to quit or 'clear memory' to reset stored context.\n")
 # Maintain a small rolling memory of recent factual prompts
 recent_facts = []
 MAX_CONTEXT_WINDOW = 3
+
+
+def sanitize_metadata(meta: dict) -> dict:
+    """
+    Ensures all metadata values are Chroma-safe (JSON-serializable primitives).
+    Converts bools and unsupported types to strings.
+    """
+    safe_meta = {}
+    for k, v in meta.items():
+        if isinstance(v, (bool,)):
+            safe_meta[k] = str(v).lower()
+        elif isinstance(v, (str, int, float)) or v is None:
+            safe_meta[k] = v
+        else:
+            safe_meta[k] = str(v)
+    return safe_meta
 
 
 def main():
@@ -112,6 +131,9 @@ def main():
             "intent": intent,
             "topic_continued": should_use_context,
         }
+
+        # ✅ Make metadata Chroma-safe
+        meta = sanitize_metadata(meta)
 
         # Step 6 — Short-term context window for embeddings
         if intent == "fact":
