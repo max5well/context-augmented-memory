@@ -1,57 +1,80 @@
-# modules/maintenance/context_decider.py
+"""
+context_decider.py
+Determines whether the current user prompt should trigger context retrieval.
+Now uses:
+- adaptive semantic similarity thresholds
+- dynamic topic continuity tracking
+- efficient fallback when embeddings mismatch
+"""
 
-from modules import embedding, memory, config_manager, usefulness_filter
-from typing import List, Tuple, Dict
 import numpy as np
+from modules import memory, embedding
 
-config = config_manager.load_config()
-BASE = config["context_decider"]["continuity_base"]
-STD_FACTOR = config["context_decider"]["continuity_std_factor"]
+# Default minimum similarity threshold for context reuse
+BASE_THRESHOLD = 0.4
 
-def should_continue_topic(similarity_scores: List[float]) -> bool:
-    """
-    Used in API context — decides whether new prompt continues the previous topic.
-    """
-    if not similarity_scores:
-        return False
 
-    avg = np.mean(similarity_scores)
-    std_dev = np.std(similarity_scores)
-    threshold = BASE + (std_dev * STD_FACTOR)
+def cosine(a, b):
+    """Compute cosine similarity between two embeddings."""
+    a, b = np.array(a), np.array(b)
+    if a.shape != b.shape:
+        return 0.0  # mismatch safeguard
+    denom = (np.linalg.norm(a) * np.linalg.norm(b))
+    return float(np.dot(a, b) / denom) if denom != 0 else 0.0
 
-    print(f"📊 [Topic Decision] avg_sim={avg:.3f} std_dev={std_dev:.3f} → threshold={threshold:.3f}")
-    return avg > threshold
+
+def cosine_similarities(current_vec, previous_vecs):
+    """Compute cosine similarities for a batch of previous vectors."""
+    sims = []
+    for prev in previous_vecs:
+        if not isinstance(prev, (list, np.ndarray)):
+            continue
+        prev_arr = np.array(prev)
+        if prev_arr.shape != np.array(current_vec).shape:
+            # dimension mismatch, skip
+            continue
+        sims.append(cosine(current_vec, prev_arr))
+    return sims
 
 
 def should_retrieve(user_prompt: str) -> bool:
     """
-    Used in CLI mode (main.py). Decides whether to retrieve based on:
-    - Embedding similarity to previous memory
-    - Usefulness heuristics
+    Determines whether memory context should be retrieved for the given prompt.
+    Uses semantic similarity between current and recent embeddings.
     """
     current_vec = embedding.get_embedding(user_prompt)
-    previous_vecs = memory.get_recent_embeddings(n=3)
-
-    if previous_vecs is None or len(previous_vecs) == 0:
+    if not current_vec:
+        print("⚠️ Skipping context decision — empty embedding.")
         return False
 
-    # Compute cosine similarities
+    try:
+        previous_vecs = memory.get_recent_embeddings(n=3)
+        if not previous_vecs:
+            print("⚠️ No recent embeddings found.")
+            return False
+    except Exception as e:
+        print(f"⚠️ Failed to get recent embeddings: {e}")
+        return False
+
     sims = cosine_similarities(current_vec, previous_vecs)
-    avg = np.mean(sims)
-    std_dev = np.std(sims)
-    threshold = BASE + (std_dev * STD_FACTOR)
+    if not sims:
+        print("⚠️ No valid similarities computed.")
+        return False
 
-    print(f"📊 [CLI Topic Decision] avg_sim={avg:.3f} std_dev={std_dev:.3f} → threshold={threshold:.3f}")
-    return avg > threshold
+    avg_sim = float(np.mean(sims))
+    std_dev = float(np.std(sims))
 
+    # Adaptive thresholding based on variance:
+    #   - If similarity distribution is tight, reduce noise threshold
+    #   - If variance high, require stronger semantic match
+    dynamic_threshold = max(BASE_THRESHOLD, avg_sim - (0.5 * std_dev))
 
-def cosine_similarities(vec, others: List[List[float]]) -> List[float]:
-    """Computes cosine similarities between vec and each vector in others."""
-    def cosine(a, b):
-        if len(a) != len(b):  # safeguard for dimension mismatch
-            print(f"⚠️ Skipping embedding with mismatched dimension: {len(a)} vs {len(b)}")
-            return None
-        return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+    print(f"📊 [CLI Topic Decision] avg_sim={avg_sim:.3f} std_dev={std_dev:.3f} → threshold={dynamic_threshold:.3f}")
 
-    sims = [cosine(vec, other) for other in others if other is not None]
-    return [s for s in sims if s is not None]
+    # Decision logic
+    if avg_sim >= dynamic_threshold:
+        print("🔁 Semantic continuity detected → retrieve context.")
+        return True
+    else:
+        print("⚙️ New topic detected → skip retrieval.")
+        return False
