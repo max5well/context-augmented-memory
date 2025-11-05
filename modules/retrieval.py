@@ -2,7 +2,7 @@
 retrieval.py
 Handles retrieval of relevant context from Chroma memory.
 Uses explicit OpenAI embeddings since Chroma embedding_function is disabled.
-Includes adaptive distance threshold logic.
+Includes dual-mode recall (continuity vs global) and adaptive distance logic.
 """
 
 from modules import memory, embedding, config_manager
@@ -14,10 +14,18 @@ config = config_manager.load_config()
 BASE_DISTANCE = config["retrieval"]["max_distance"]
 
 
-def retrieve_context(query: str, n_results: int = 5, include_meta: bool = False) -> str:
+def retrieve_context(
+    query: str,
+    n_results: int = 5,
+    include_meta: bool = False,
+    mode: str = "continuity",
+) -> str:
     """
     Retrieves relevant memory entries for a given query.
-    Dynamically adjusts distance threshold if few matches are found.
+
+    Modes:
+    - "continuity" → tighter distance threshold for current conversation
+    - "global" → relaxed threshold for long-term factual recall
     """
 
     where_filter = {} if include_meta else {"intent": "fact"}
@@ -44,18 +52,18 @@ def retrieve_context(query: str, n_results: int = 5, include_meta: bool = False)
     distances = results["distances"][0]
     metadatas = results["metadatas"][0]
 
-    # --- Adaptive filtering logic ---
-    threshold = BASE_DISTANCE
+    # --- Dynamic thresholding ---
+    threshold = BASE_DISTANCE * (1.0 if mode == "continuity" else 1.5)
     relevant: List[Tuple[str, float, Dict]] = [
         (doc, dist, meta)
         for doc, dist, meta in zip(docs, distances, metadatas)
         if dist <= threshold
     ]
 
-    # If nothing passes the filter, relax the threshold automatically
+    # --- Auto-relax threshold if needed ---
     if not relevant and distances:
         avg_dist = np.mean(distances)
-        new_threshold = min(avg_dist + 0.15, 0.9)
+        new_threshold = min(avg_dist + 0.15, 0.95)
         print(f"⚙️ Relaxing threshold {threshold:.2f} → {new_threshold:.2f} (avg_dist={avg_dist:.3f})")
 
         relevant = [
@@ -83,5 +91,5 @@ def retrieve_context(query: str, n_results: int = 5, include_meta: bool = False)
             for doc, dist, meta in relevant
         ]
 
-    print(f"✅ Retrieved {len(relevant)} relevant memories (distance ≤ {threshold:.2f})")
+    print(f"✅ Retrieved {len(relevant)} relevant memories (mode={mode}, distance ≤ {threshold:.2f})")
     return "\n---\n".join(context_lines)
