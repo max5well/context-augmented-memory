@@ -1,12 +1,12 @@
 """
 main.py
 Standalone CLI runner for Context-Augmented Memory (CAM)
-Now explicitly passes embedding vectors to Chroma after disabling auto-embedding.
-Also enhances context injection to treat retrieved memory as factual knowledge.
+Enhanced with intent-aware logic and dual-mode memory retrieval.
 """
 
 import os
 import datetime
+from uuid import uuid4
 from openai import OpenAI
 from modules import (
     embedding,
@@ -17,9 +17,8 @@ from modules import (
     context_decider,
     config_manager,
 )
-from uuid import uuid4
 
-# --- Initialize client ---
+# --- Initialize ---
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 config = config_manager.load_config()
 
@@ -33,6 +32,7 @@ def main():
         if not user_prompt:
             continue
 
+        # --- Exit / Clear memory ---
         if user_prompt.lower() in ["exit", "quit"]:
             break
         if user_prompt.lower() in ["clear memory", "reset"]:
@@ -40,37 +40,49 @@ def main():
             print("🧹 Memory cleared.")
             continue
 
-        # Step 1 — Decide whether to use memory retrieval
-        try:
-            should_use_context = context_decider.should_retrieve(user_prompt)
-        except Exception as e:
-            print(f"⚠️ Retrieval decision failed: {e}")
-            should_use_context = False
+        # --- Step 1: Classify intent ---
+        intent = intent_classifier.classify_intent(user_prompt)
+        print(f"🎯 Detected intent: {intent}")
 
+        # --- Step 2: Decide retrieval mode ---
         context = ""
-        if should_use_context:
-            print("🔎 Semantic continuity detected — retrieving context...\n")
-            context = retrieval.retrieve_context(user_prompt)
 
-        # Step 2 — Build LLM prompt with stronger factual context
-        if context:
-            full_prompt = f"""You are an AI assistant with perfect memory.
-
-Use the following retrieved context as **factual information**.
-Treat these statements as absolute truth — never express uncertainty about them.
-
----
-{context}
----
-
-Now respond naturally to the user's latest input, staying consistent with those facts.
-User: {user_prompt}
-"""
+        if intent == "fact":
+            print("🧩 Detected factual input — will store after LLM response.")
+        elif intent == "query":
+            print("🔍 Query detected — searching memory globally...")
+            context = retrieval.retrieve_context(
+                user_prompt, n_results=5, include_meta=True, mode="global"
+            )
+        elif intent == "meta":
+            print("🧭 Meta command — skipping retrieval.")
         else:
-            print("⚙️ New topic detected — skipping retrieval.")
+            # Default: use continuity detection
+            try:
+                should_use_context = context_decider.should_retrieve(user_prompt)
+            except Exception as e:
+                print(f"⚠️ Retrieval decision failed: {e}")
+                should_use_context = False
+
+            if should_use_context:
+                print("🔎 Semantic continuity detected — retrieving context...\n")
+                context = retrieval.retrieve_context(
+                    user_prompt, n_results=5, mode="continuity"
+                )
+            else:
+                print("⚙️ New topic detected — trying global recall...")
+                context = retrieval.retrieve_context(
+                    user_prompt, n_results=5, include_meta=True, mode="global"
+                )
+
+        if context:
+            print("📚 Retrieved context found — augmenting your prompt...\n")
+            full_prompt = f"{context}\n\nUser: {user_prompt}"
+        else:
+            print("🚫 No relevant context found — proceeding without memory.")
             full_prompt = user_prompt
 
-        # Step 3 — Send to LLM
+        # --- Step 3: Send to LLM ---
         print("💬 Sending prompt to LLM...\n")
         try:
             response = client.responses.create(
@@ -84,16 +96,16 @@ User: {user_prompt}
 
         print(f"\n🤖 LLM Output:\n {llm_output}\n")
 
-        # Step 4 — Intent and tagging
-        intent = intent_classifier.classify_intent(user_prompt)
+        # --- Step 4: Skip storing if meta or query intent ---
         if intent in ["meta", "query"]:
             print("🚫 Skipped storing trivial, query, or meta prompt.")
             print("------------------------------------------------------------\n")
             continue
 
+        # --- Step 5: Tagging ---
         tag = auto_tagger.auto_tag(user_prompt)
 
-        # Step 5 — Prepare metadata
+        # --- Step 6: Prepare metadata ---
         episode_id = str(uuid4())[:12]
         meta = {
             "episode_id": episode_id,
@@ -105,17 +117,17 @@ User: {user_prompt}
             "user_prompt": user_prompt,
             "tag": tag,
             "intent": intent,
-            "topic_continued": bool(should_use_context),
+            "topic_continued": intent != "fact" and context != "",
         }
 
-        # Step 6 — Generate embedding and store in Chroma
+        # --- Step 7: Generate embedding & store ---
         try:
             embedding_vector = embedding.get_embedding(llm_output)
             memory.store(llm_output, meta, embedding_vector)
         except Exception as e:
             print(f"❌ Failed to store memory: {e}")
 
-        print(f"🧠 Episode {episode_id} stored (tag: {tag}, continued: {should_use_context})")
+        print(f"🧠 Episode {episode_id} stored (tag: {tag}, intent: {intent})")
         print("------------------------------------------------------------\n")
 
 
