@@ -118,3 +118,18 @@ def reinforce_memory(episode_id: str):
     meta["decay"] = min(1.0, meta.get("decay", 1.0) * 1.05)
     collection.update(ids=[episode_id], metadatas=[meta])
     print(f"💪 Reinforced episode {episode_id} → decay {meta['decay']:.3f}")
+
+# --- New helper: Retrieve recent embeddings for context comparison ---
+def get_recent_embeddings(n: int = 3):
+    """
+    Returns embeddings of the most recent n memory entries.
+    Used by context_decider to determine semantic continuity.
+    """
+    try:
+        data = collection.get(limit=n, include=["embeddings"])
+        if not data or not data.get("embeddings"):
+            return []
+        return data["embeddings"]
+    except Exception as e:
+        print(f"⚠️ Failed to get recent embeddings: {e}")
+        return []
