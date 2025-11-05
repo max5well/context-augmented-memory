@@ -26,23 +26,13 @@ def should_continue_topic(similarity_scores: List[float]) -> bool:
 def should_retrieve(user_prompt: str) -> bool:
     """
     Used in CLI mode (main.py). Decides whether to retrieve based on:
-    - usefulness filter
-    - embedding similarity
-    - dynamic thresholding
+    - Embedding similarity to previous memory
+    - Usefulness heuristics
     """
-    if not usefulness_filter.is_useful(user_prompt):
-        print("⚠️ Skipping trivial or meta prompt.")
-        return False
-
-    # Embed current prompt
     current_vec = embedding.get_embedding(user_prompt)
+    previous_vecs = memory.get_recent_embeddings(n=3)
 
-    # Get past embeddings (last N items)
-    past = memory.collection.get(include=["embeddings"], limit=5)
-    previous_vecs = past.get("embeddings", [])
-
-    if not previous_vecs:
-        print("⚠️ No previous embeddings — skipping retrieval.")
+    if previous_vecs is None or len(previous_vecs) == 0:
         return False
 
     # Compute cosine similarities
