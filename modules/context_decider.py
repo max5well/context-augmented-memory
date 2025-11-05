@@ -1,7 +1,7 @@
 # modules/maintenance/context_decider.py
 
-from modules.maintenance import embedding, memory, config_manager, usefulness_filter
-from typing import List
+from modules import embedding, memory, config_manager, usefulness_filter
+from typing import List, Tuple, Dict
 import numpy as np
 
 config = config_manager.load_config()
