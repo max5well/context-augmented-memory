@@ -1,7 +1,7 @@
 """
 memory.py
 Handles Chroma vector storage and retrieval for CAM.
-Now includes automatic embedding dimension detection and recovery.
+Clean version — uses OpenAI embeddings only (no Chroma auto-embedding).
 """
 
 import os
@@ -21,28 +21,15 @@ COLLECTION_NAME = "cam_memory"
 def get_embedding_dimension() -> int:
     """Return current embedding model's vector dimension."""
     sample = embedding.get_embedding("dimension check")
-    return len(sample) if sample else 0
-
-def ensure_collection_consistency():
-    """Ensure Chroma collection matches embedding model dimension."""
-    dim = get_embedding_dimension()
+    dim = len(sample) if sample else 0
     print(f"🧮 Detected embedding dimension: {dim}")
+    return dim
 
-    try:
-        collection = client.get_collection(COLLECTION_NAME)
-        # Check an existing record to compare
-        sample = collection.peek(1)
-        if sample and "embeddings" in sample and len(sample["embeddings"][0]) != dim:
-            print(f"⚠️ Dimension mismatch detected — resetting collection ({len(sample['embeddings'][0])} → {dim})")
-            client.delete_collection(COLLECTION_NAME)
-            return client.create_collection(COLLECTION_NAME)
-        return collection
-    except Exception:
-        print("ℹ️ No existing collection found — creating new.")
-        return client.create_collection(COLLECTION_NAME)
-
-# --- Initialize collection ---
-collection = ensure_collection_consistency()
+# ✅ Disable Chroma’s built-in embedding model since we use OpenAI embeddings
+collection = client.get_or_create_collection(
+    name=COLLECTION_NAME,
+    embedding_function=None
+)
 
 # --- Core memory functions ---
 
@@ -60,7 +47,7 @@ def store(text: str, metadata: dict, embedding_vector: list):
             embeddings=[embedding_vector],
             ids=[id_],
         )
-        print(f"🧠 Stored memory: {id_} ({len(embedding_vector)} dims)")
+        print(f"🧠 Stored memory: {id_} ({len(embedding_vector)} dims) ✅")
     except Exception as e:
         print(f"❌ Failed to store memory: {e}")
 
@@ -68,20 +55,38 @@ def query(query_text: str, n_results: int = 5):
     """Query similar memories."""
     return collection.query(query_texts=[query_text], n_results=n_results)
 
-
 def get_recent_embeddings(n: int = 3):
     """
     Returns the most recent n embeddings from memory for context comparison.
     """
     try:
         data = collection.peek(n)
-        if not data or "embeddings" not in data or not data["embeddings"]:
+        embeddings = data.get("embeddings", [])
+
+        if embeddings is None or len(embeddings) == 0:
             print("⚠️ No recent embeddings found.")
             return []
 
-        embeddings = [e for e in data["embeddings"] if e]
-        print(f"📤 Retrieved {len(embeddings)} recent embeddings for comparison.")
-        return embeddings
+        # Some Chroma versions return NumPy arrays, others lists — normalize them
+        normalized = []
+        for e in embeddings:
+            if e is None:
+                continue
+            import numpy as np
+            if isinstance(e, np.ndarray):
+                normalized.append(e.tolist())
+            elif isinstance(e, list):
+                normalized.append(e)
+            else:
+                try:
+                    normalized.append(list(e))
+                except Exception:
+                    continue
+
+        print(f"📤 Retrieved {len(normalized)} recent embeddings for comparison.")
+        return normalized
+
     except Exception as e:
         print(f"⚠️ Failed to get recent embeddings: {e}")
         return []
+
