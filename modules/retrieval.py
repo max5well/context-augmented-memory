@@ -1,80 +1,67 @@
 """
 retrieval.py
 Handles retrieval of relevant context from Chroma memory.
-Optimized for:
-- lightweight pronoun-aware re-ranking
-- adaptive distance threshold logic
-- flexible dual retrieval modes ("contextual" and "global")
+Now fully supports:
+- contextual vs global search modes
+- adaptive thresholds
+- pronoun-aware re-ranking
+- safe Chroma query filters
 """
 
 from modules import memory, embedding, config_manager
 from typing import List, Tuple, Dict
 import numpy as np
 
-# Load config values
 config = config_manager.load_config()
 BASE_DISTANCE = config["retrieval"]["max_distance"]
 
 
-def _rerank_with_pronouns(
-    query: str,
-    results: List[Tuple[str, float, Dict]],
-) -> List[Tuple[str, float, Dict]]:
-    """
-    Lightweight re-ranking of retrieval results.
-    Prioritizes memories containing named entities that match pronoun references.
-    Example:
-        query = "How old is he?" → boost entries with "Tom" or other recent entities.
-    """
+def _rerank_with_pronouns(query: str, results: List[Tuple[str, float, Dict]]):
     pronouns = {"he", "she", "it", "they", "him", "her", "them"}
     if not any(p in query.lower().split() for p in pronouns):
-        return results  # No pronouns → skip
+        return results
 
-    # Simple heuristic boost: entries with capitalized names or "called/named"
     reranked = []
     for doc, dist, meta in results:
-        score = 1.0 / (1.0 + dist)  # baseline inverse distance weight
+        score = 1.0 / (1.0 + dist)
         text = (meta.get("user_prompt", "") + " " + doc).lower()
-        if any(kw in text for kw in ["called", "named"]):
+        if any(kw in text for kw in ["called", "named", "is", "has"]):
             score *= 1.25
-        if any(word.istitle() for word in doc.split()):  # capitalized names
+        if any(word.istitle() for word in doc.split()):
             score *= 1.1
         reranked.append((doc, dist, meta, score))
-
-    # Sort descending by score
     reranked.sort(key=lambda x: x[3], reverse=True)
     return [(doc, dist, meta) for doc, dist, meta, _ in reranked]
 
 
-def retrieve_context(
-    query: str,
-    n_results: int = 5,
-    include_meta: bool = False,
-    mode: str = "contextual",
-) -> str:
-    """
-    Retrieves relevant memory entries for a given query.
+def retrieve_context(query: str, n_results: int = 5, include_meta: bool = False, mode: str = "contextual") -> str:
+    """Retrieve relevant memory entries from Chroma with adaptive and pronoun-aware logic."""
 
-    mode:
-        - "contextual" → limited to facts & continuity checks
-        - "global" → full memory search across all intents
-    """
+    # Build proper Chroma filter safely
+    if mode == "contextual":
+        where_filter = {"intent": {"$eq": "fact"}}
+    else:
+        where_filter = None  # skip filter completely for full memory search
 
-    where_filter = {"intent": "fact"} if mode == "contextual" else {}
-
-    # --- Generate query embedding manually ---
     query_vector = embedding.get_embedding(query)
     if not query_vector:
         print("⚠️ Failed to generate query embedding.")
         return ""
 
-    # --- Perform Chroma query ---
-    results = memory.collection.query(
-        query_embeddings=[query_vector],
-        n_results=n_results,
-        where=where_filter,
-        include=["documents", "distances", "metadatas"],
-    )
+    # Perform query safely
+    try:
+        query_kwargs = dict(
+            query_embeddings=[query_vector],
+            n_results=n_results,
+            include=["documents", "distances", "metadatas"],
+        )
+        if where_filter:
+            query_kwargs["where"] = where_filter
+
+        results = memory.collection.query(**query_kwargs)
+    except Exception as e:
+        print(f"⚠️ Retrieval decision failed: {e}")
+        return ""
 
     if not results or not results.get("documents") or not results["documents"][0]:
         print("⚠️ No matching memory found.")
@@ -84,20 +71,17 @@ def retrieve_context(
     distances = results["distances"][0]
     metadatas = results["metadatas"][0]
 
-    # --- Adaptive filtering logic ---
     threshold = BASE_DISTANCE
-    relevant: List[Tuple[str, float, Dict]] = [
+    relevant = [
         (doc, dist, meta)
         for doc, dist, meta in zip(docs, distances, metadatas)
         if dist <= threshold
     ]
 
-    # If nothing passes filter, relax dynamically
     if not relevant and distances:
         avg_dist = np.mean(distances)
         new_threshold = min(avg_dist + 0.25, 1.2)
         print(f"⚙️ Relaxing threshold {threshold:.2f} → {new_threshold:.2f} (avg_dist={avg_dist:.3f})")
-
         relevant = [
             (doc, dist, meta)
             for doc, dist, meta in zip(docs, distances, metadatas)
@@ -109,10 +93,8 @@ def retrieve_context(
         print(f"⚠️ No relevant items under distance threshold ({threshold:.2f}).")
         return ""
 
-    # --- Pronoun-aware re-ranking ---
     relevant = _rerank_with_pronouns(query, relevant)
 
-    # --- Build readable context ---
     if include_meta:
         context_lines = [
             f"[Meta — tag: {meta.get('tag', 'NONE')} | date: {meta.get('timestamp', 'unknown')}]"
