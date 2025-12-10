@@ -82,7 +82,7 @@ def main():
             print(f"⚠️ Retrieval decision failed: {e}")
 
         if should_use_context and context:
-            print("📚 Retrieved context found — augmenting your prompt...\n")
+            print("📚 Retrieved context found — augmenting your prompt..\n")
             full_prompt = f"{context}\n\nUser: {user_prompt}"
         elif should_use_context:
             print("🔎 Semantic continuity detected — retrieving context...\n")

@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-def get_embedding(text: str, model: str = "text-embedding-3-small") -> list:
+def get_embedding(text: str, model: str = "text-embedding-3-large") -> list:
     """
     Returns embedding vector for a given text.
     """

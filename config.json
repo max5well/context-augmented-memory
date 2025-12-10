@@ -1,6 +1,6 @@
 {
     "retrieval": {
-        "max_distance": 0.6
+        "max_distance": 0.8
     },
     "usefulness_filter": {
         "min_word_count": 3,
