@@ -47,7 +47,7 @@ def store(text: str, metadata: dict, embedding_vector: list):
             embeddings=[embedding_vector],
             ids=[id_],
         )
-        print(f"🧠 Stored memory: {id_} ({len(embedding_vector)} dims) ✅")
+
     except Exception as e:
         print(f"❌ Failed to store memory: {e}")
 
