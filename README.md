@@ -90,6 +90,7 @@ CAM/
 ├── config.json            # Configuration settings
 ├── documentation.md       # Detailed technical docs
 ├── .env.example           # Environment template
+├── cam_client.py          # Simple Python client
 ├── requirements.txt       # Python dependencies
 ├── modules/               # Core CAM functionality
 └── proxy_api/            # API for external apps
