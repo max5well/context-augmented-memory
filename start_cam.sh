@@ -2,7 +2,7 @@
 
 # === Context-Augmented Memory startup script ===
 CHROMA_PATH="./CAM_project/chroma_db"
-CHROMA_PORT=8000
+CHROMA_PORT=8001
 PROXY_PORT=8080
 
 echo "🚀 Starting Context-Augmented Memory (CAM) system..."

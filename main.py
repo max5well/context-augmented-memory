@@ -17,7 +17,7 @@ from modules import (
     retrieval,
     auto_tagger,
     intent_classifier,
-    context_decider,
+    context_service,
     config_manager,
 )
 
