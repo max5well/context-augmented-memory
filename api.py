@@ -12,9 +12,8 @@ class Request(BaseModel):
 
 
 @app.post("/retrieve-context")
-def retrieve_context(request: Request):
+def retrieve_context_api(request: Request):
     prompt = request.prompt.strip()
-
     if not prompt:
         raise HTTPException(status_code=400, detail="Prompt cannot be empty")
 
@@ -27,3 +26,4 @@ def retrieve_context(request: Request):
         "prompt": prompt,
         "context": context
     }
+

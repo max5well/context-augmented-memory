@@ -1,48 +1,44 @@
 """
 main.py
 Standalone CLI runner for Context-Augmented Memory (CAM)
-Includes:
-- short-term sliding context window for factual continuity
-- robust dual-mode retrieval
-- safe metadata serialization for Chroma
+
+FINAL VERSION:
+- Facts are written ONLY by the user
+- Queries NEVER write memory
+- Facts are NEVER augmented with context
+- Queries use authoritative FACTS prompt
+- LLM output can never pollute memory
 """
 
 import os
 import datetime
 from uuid import uuid4
 from openai import OpenAI
+
 from modules import (
     embedding,
     memory,
     retrieval,
     auto_tagger,
     intent_classifier,
-    context_service,
     config_manager,
 )
 
-# --- Initialize ---
+# --------------------------------------------------
+# Initialization
+# --------------------------------------------------
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 config = config_manager.load_config()
 
 print("🧠 Context-Augmented Memory System (CAM)")
 print("Type 'exit' to quit or 'clear memory' to reset stored context.\n")
 
-# Maintain a small rolling memory of recent factual prompts
-recent_facts = []
-MAX_CONTEXT_WINDOW = 3
-
 
 def sanitize_metadata(meta: dict) -> dict:
-    """
-    Ensures all metadata values are Chroma-safe (JSON-serializable primitives).
-    Converts bools and unsupported types to strings.
-    """
+    """Ensure metadata is Chroma-safe."""
     safe_meta = {}
     for k, v in meta.items():
-        if isinstance(v, (bool,)):
-            safe_meta[k] = str(v).lower()
-        elif isinstance(v, (str, int, float)) or v is None:
+        if isinstance(v, (str, int, float)) or v is None:
             safe_meta[k] = v
         else:
             safe_meta[k] = str(v)
@@ -55,47 +51,61 @@ def main():
         if not user_prompt:
             continue
 
-        if user_prompt.lower() in ["exit", "quit"]:
+        if user_prompt.lower() in {"exit", "quit"}:
             break
-        if user_prompt.lower() in ["clear memory", "reset"]:
+
+        if user_prompt.lower() in {"clear memory", "reset"}:
             os.system("rm -rf CAM_project/chroma_db")
-            recent_facts.clear()
             print("🧹 Memory cleared.")
             continue
 
-        # Step 1 — Determine intent
+        # --------------------------------------------------
+        # Step 1 — Intent detection
+        # --------------------------------------------------
         intent = intent_classifier.classify_intent(user_prompt)
         print(f"🎯 Detected intent: {intent}")
 
-        # Step 2 — Retrieval decision
-        should_use_context = False
+        # --------------------------------------------------
+        # Step 2 — Retrieval (READ-ONLY)
+        # --------------------------------------------------
         context = ""
 
-        try:
-            if intent == "query":
-                print("🔍 Query detected — searching memory globally...")
-                context = retrieval.retrieve_context(user_prompt, n_results=5, mode="global")
-                should_use_context = bool(context)
-            elif intent == "fact":
-                should_use_context = context_decider.should_retrieve(user_prompt)
-        except Exception as e:
-            print(f"⚠️ Retrieval decision failed: {e}")
+        if intent == "query":
+            print("🔍 Query detected — searching memory globally...")
+            context = retrieval.retrieve_context(
+                user_prompt,
+                n_results=1,
+                mode="global",
+                plain=True,
+            )
 
-        if should_use_context and context:
+        should_use_context = bool(context)
+
+        # --------------------------------------------------
+        # Step 3 — Prompt construction (CRITICAL FIX)
+        # --------------------------------------------------
+
+        if intent == "query" and should_use_context:
             print("📚 Retrieved context found — augmenting your prompt..\n")
-            full_prompt = f"{context}\n\nUser: {user_prompt}"
-        elif should_use_context:
-            print("🔎 Semantic continuity detected — retrieving context...\n")
-            context = retrieval.retrieve_context(user_prompt)
-            full_prompt = f"{context}\n\nUser: {user_prompt}"
+
+            full_prompt = (
+                "You are answering using the following known facts.\n"
+                "These facts are true and must be used to answer the question.\n\n"
+                f"FACTS:\n{context}\n\n"
+                f"QUESTION:\n{user_prompt}\n\n"
+                "Answer using only the facts above."
+            )
+
         else:
-            if intent == "query":
-                print("⚙️ No context found — running standalone query.")
-            else:
-                print("🚫 No relevant context found — proceeding without memory.")
+            # IMPORTANT:
+            # - facts are sent RAW
+            # - facts are NOT augmented
+            # - chat/meta stay unchanged
             full_prompt = user_prompt
 
-        # Step 3 — LLM generation
+        # --------------------------------------------------
+        # Step 4 — LLM generation
+        # --------------------------------------------------
         print("💬 Sending prompt to LLM...\n")
         try:
             response = client.responses.create(
@@ -107,18 +117,22 @@ def main():
             print(f"❌ LLM request failed: {e}")
             llm_output = "(Error: LLM request failed)"
 
-        print(f"\n🤖 LLM Output:\n {llm_output}\n")
+        print(f"\n🤖 LLM Output:\n{llm_output}\n")
 
-        # Step 4 — Skip trivial/meta messages
-        if intent in ["meta", "query"] and not should_use_context:
-            print("🚫 Skipped storing trivial, query, or meta prompt.")
+        # --------------------------------------------------
+        # Step 5 — NEVER store query answers
+        # --------------------------------------------------
+        if intent == "query":
+            print("🚫 Query intent — skipping memory storage.")
             print("------------------------------------------------------------\n")
             continue
 
+        # --------------------------------------------------
+        # Step 6 — Store FACTS ONLY (USER INPUT)
+        # --------------------------------------------------
         tag = auto_tagger.auto_tag(user_prompt)
-
-        # Step 5 — Build metadata
         episode_id = str(uuid4())[:12]
+
         meta = {
             "episode_id": episode_id,
             "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
@@ -129,24 +143,15 @@ def main():
             "user_prompt": user_prompt,
             "tag": tag,
             "intent": intent,
-            "topic_continued": should_use_context,
         }
 
-        # ✅ Make metadata Chroma-safe
         meta = sanitize_metadata(meta)
 
-        # Step 6 — Short-term context window for embeddings
-        if intent == "fact":
-            recent_facts.append(user_prompt)
-            if len(recent_facts) > MAX_CONTEXT_WINDOW:
-                recent_facts.pop(0)
-
-        embedding_input = " ".join(recent_facts[-MAX_CONTEXT_WINDOW:]) + " " + llm_output
-
         try:
-            embedding_vector = embedding.get_embedding(embedding_input)
-            memory.store(llm_output, meta, embedding_vector)
-            print(f"🧠 Stored memory: {episode_id} ({len(embedding_vector)} dims) ✅")
+            # FACTS are stored EXACTLY as the user said them
+            embedding_vector = embedding.get_embedding(user_prompt)
+            memory.store(user_prompt, meta, embedding_vector)
+            print(f"🧠 Stored fact: {episode_id} ({len(embedding_vector)} dims) ✅")
         except Exception as e:
             print(f"❌ Failed to store memory: {e}")
 
